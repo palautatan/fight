@@ -1,0 +1,422 @@
+---
+title: Northern Californian Martial Arts
+output:
+  html_document:
+    code_folding: hide
+---
+
+The world is dense with martial arts. Each art carries with it culture, philosophy, and discipline. Wushu artists make difficult technique look swift on screenplay, and mixed martial artists take the best of disciplines to the fighting arena. Bruce Lee's *Jeet Kune Do* book and martial art form emphasizes how "nationalities don't matter" in fighting. What does is how you can use techniques to create the effect you desire^1^. Thus, martial arts for everyone is a unique experience. Some practitioners enjoy the theory of arts and try to find which strike is most efficient in movement; some favor martial arts weaponry. This vast array of martial arts interests and resolves has uprooted countless martial arts academies led by their arts' most devoted advocates.
+
+The following data analysis limits research to Northern California where I call home. Below, I am choosing a number of Northern Californian municipalities to begin with. Later, you will see I added in more cities according to personal choice, although I believe that I chose according to population size. These are the lot I began with.
+
+```{r start-cities, echo=FALSE}
+northern_californian_cities <- c("San Jose",
+                                 "San Francisco",
+                                 "Fresno",
+                                 "Sacramento",
+                                 "Oakland",
+                                 "Stockton",
+                                 "Daly City",
+                                 "Vacaville",
+                                 "Vallejo",
+                                 "Pinole")
+
+northern_californian_cities <- paste0(northern_californian_cities, " CA")
+print(northern_californian_cities)
+```
+
+
+# Putting martial arts on the map
+
+
+### Libraries
+I'm going to start with putting martial arts schools onto a map using the `leaflet` library^2^ with the help of `dplyr`^3^ and `yelpr`^4^. Later, I use `ggplot`^5^ as well.
+
+```{r libs, warning=FALSE, message=FALSE}
+# devtools::install_github("OmaymaS/yelpr")
+# devtools::install_github("dkahle/ggmap")
+
+library(dplyr)
+library(yelpr)
+library(ggplot2)
+library(leaflet)
+```
+
+### Pulling Yelp data
+The data come from Yelp, so indeed that limits our martial arts brothers and sisters who do not advertise their businesses on Yelp.
+
+```{r key, include=FALSE}
+yelp_key <- ""
+```
+
+To pull the business data I wished to put on the map, I queried "martial arts" using `yelpr` using the below function called `get_dataset`. To see it, click the `Code` button. I used an `lapply` to get datasets for each of the cities I listed above and manually chose some more.
+
+```{r get-dataset-fx}
+get_dataset <- function(norcal_location, write=FALSE) {
+  this_location <- paste0(norcal_location, " CA")
+  print(this_location)
+  
+  martial_arts <- business_search(api_key=yelp_key,
+                                  location=this_location,
+                                  term="martial arts",
+                                  limit=50)
+  
+  martial_arts <- data.frame(martial_arts)
+  martial_arts <- martial_arts %>% select(businesses.rating, businesses.name, businesses.location, businesses.coordinates, businesses.is_closed, businesses.review_count, businesses.categories)
+  
+  martial_arts <- cbind(martial_arts, martial_arts[,4], 
+                         arts=sapply(1:nrow(martial_arts), function(k) 
+                           paste0(martial_arts[k,]$businesses.categories[[1]]$title, collapse=" |&| "))) %>%
+    select(-businesses.coordinates, -businesses.location, -businesses.categories)
+  
+  if (write) {
+    write.csv(martial_arts, paste0("datasets/", paste0(strsplit(tolower(this_location), " ")[[1]], collapse="-"),".csv"))
+  } else {
+    martial_arts
+  }
+}
+```
+
+After lots of manual additions, I ended up writing a lot of files. For those of you who are new to using web tech, always save the info you scrape off of a website to your local disk! If not, you might get kicked off the site for excessive downloading. These are the cities I am including on my map.
+
+```{r city-datasets}
+datasets <- list.files("datasets", full.names=TRUE)
+datasets
+```
+
+### Map of all schools
+
+Using the above files, I made the following map. As you can see, I have selected some of the more population dense municipalities. You can zoom in and click on any of the bubbles to see which school is pinned on the map. See if you can find "Campos Kenpo Karate"!
+
+```{r first-map}
+start_dataset <- read.csv(datasets[1])[,-1]
+
+for (each_dataset in datasets[2:length(datasets)]) {
+  this_dataset <- read.csv(each_dataset)[,-1]
+  start_dataset <- rbind(start_dataset, this_dataset)
+}
+
+start_dataset <- start_dataset %>% arrange(-businesses.review_count)
+
+leaflet() %>%
+  setView(lng = mean(start_dataset$longitude), lat = mean(start_dataset$latitude), zoom = 8) %>%
+  addProviderTiles(providers$CartoDB.Positron) %>%
+  addMarkers(lng = start_dataset$longitude, lat = start_dataset$latitude, popup = start_dataset$businesses.name)
+```
+
+Nothing is too surprising with this map. There are a lot of schools in San Francisco and Oakland. It will be interesting to explore which styles are most popular in those areas.
+
+### Coloring in by style
+To color in the pins by martial art style required plenty of data cleaning. No longer did we have simplicity to work with as was with the latitudes and longitudes. But I took a deep breath and dived in anyway.
+
+#### Filtering out miscellaneous businesses
+I am removing yoga, pilates, and commercial fitness gyms from the dataset. Our original dataset contained `r dim(start_dataset)[1]` businesses.
+
+I first began with removing pure pilates and yoga hubs. I did this by seeing which businesses matched yoga but did not match any of the "approved" martial art styles I specified based on inspecting the dataset itself.
+
+```{r remove-pilates-yoga}
+approved <- c("Aikido|Aiki Kai|Aikikai",
+              "Boxing",
+              "Capoeira|CAPOEIRA",
+              "Filipino Martial Arts|Eskrima|Arnis|Yaw-Yan",
+              "Hapkido",
+              "Jeet Kune DO|Jeet Kune Do",
+              "BJJ|Brazilian Jiu-jitsu|Gracie|Brazilian|Brazilian Jiu-jitsu|Brazilian Jiu-Jitsu",
+              "Jiu Jitsu|Jiu-jitsu|Jiu-Jitsu|Jujutsu|Aikijujutsu",
+              "Judo",
+              "Kajukenbo",
+              "Karate",
+              "Kenpo",
+              "Kickboxing|KBX",
+              "Krav Maga",
+              "Kuk Sool Won",
+              "Kung Fu|Gungfu|Kungfu|Kung-fu|Kung-Fu|kung fu|shou|Shou",
+              "Mixed Martial Arts|MMA",
+              "Muay Thai|Muay",
+              "Self Defense|Self-defense Classes",
+              "Shotokan",
+              "Tae Kwon Do|Taekwondo|TKD|Tae",
+              "Tai Chi|Taiji",
+              "Wingchun|WingChun|Wing chun|Wing Chun|Wing",
+              "Wushu")
+
+
+ix <- which((grepl("Yoga|Pilates|Acupuncture", start_dataset$arts)))
+these_arts <- start_dataset$arts[ix]
+check_table <- do.call(rbind, lapply(these_arts, function(j) sapply(approved, function(k) grepl(k, as.character(j)))))
+clean_set <- start_dataset[-ix[apply(check_table, 1, function(j) !any(j))],]
+```
+
+This took us down to `r dim(clean_set)[1]` businesses. I continued to remove general fitness gyms and some sport clubs from the dataset.
+
+```{r remove-commercial-gyms}
+gen_gyms <- "24 Hour Fitness|Fitness 19|Crunch|Orangetheory|FITNESS SF|Crossfit|CrossFit|Cross Fit|Snap Fitness|Swimming|Gymnastic|O21Fit"
+
+ix <- which(grepl(gen_gyms, clean_set$businesses.name))
+clean_set <- clean_set[-ix,]
+```
+
+This took us down to `r dim(clean_set)[1]` businesses. These two preliminary filtering steps allowed for the next two filters based on business name and Yelp business tags.
+
+#### Filtering from business names and Yelp tags
+The first way to navigate what martial art style a school practices given only Yelp Fusion data (and not doing further messy webscraping of their business websites) is to look at school names. If a business on Yelp was registered with any of the styles off of my "approved" list, then it had an explicit art I could color its pin by. Unfortunately for this analysis, many businesses did not provide a certain art in their school name.
+
+```{r filter-based-business-name}
+search_matrix <- sapply(approved, function(k) {
+  grepl(k, clean_set %>% pull(businesses.name))
+})
+
+pass_approval <- apply(search_matrix, 1, function(k) any(k))
+```
+
+Sometimes, a business would specify their martial art style in their Yelp tag. Often times, they did not, probably because the tags available to business owners on Yelp did not specify their art. Schools that did not have a specified martial art style in their Yelp tags were noted to be filtered out for the map.
+
+```{r filter-based-tags}
+search_matrix_2 <- sapply(approved, function(k) {
+  grepl(k, clean_set %>% pull(arts))
+})
+
+pass_approval_2 <- apply(search_matrix, 1, function(k) any(k))
+```
+
+I filtered out all the businesses that did not have their martial art style in the business name or in their Yelp tags.
+
+```{r filtered-explicit-styles}
+ix <- intersect(which(pass_approval), which(pass_approval_2))
+styles_set <- clean_set[ix,]
+head(styles_set %>% select(businesses.name, arts))
+```
+
+Our dataset, for plotting purposes, shrunk to include `r dim(styles_set)[1]` businesses. In another statistical world, I would have freak out, but since we were plotting onto such a small area and overplot anyway, I was not worried. I assumed that the spread of school naming conventions was random, and that the new subset was representative of the population.
+
+#### Sorting styles
+To get some color on the martial arts map of Nothern California, I had to sort the schools out by style. I set this all up for myself in the previous step, but I had to finalize it here. I also never dropped duplicated business names until this point. For what reason? Laziness.
+
+```{r search, echo=FALSE}
+styles_set <- cbind(styles_set, easy_search=paste0(as.character(styles_set$businesses.name), rep(" |&| ", nrow(styles_set)), as.character(styles_set$arts)))
+
+styles_set_2 <- styles_set[!duplicated(styles_set$businesses.name),]
+
+# * BUSINESS NAMES AND TAGS
+search_matrix_3 <- sapply(approved, function(k) {
+  grepl(k, styles_set_2 %>% pull(easy_search))
+})
+
+# * BUSINESS NAMES ONLY
+search_matrix_4 <- sapply(approved, function(k) {
+  grepl(k, styles_set_2 %>% pull(businesses.name))
+})
+```
+
+I was then tasked to check that each school had exactly one label for the map.
+
+To do this, filtering methods consisted of:  
+<ul>
+- If "jiu jitsu" and "Brazilian jiu jitsu" matched, void "jiu jitsu" style  
+- If "karate" and "kung fu" matched, void "karate" style  
+- If "karate" and "kenpo" matched, void "karate" style  
+- If "wushu" and "kung fu" matched, void "kung fu" style  
+- If "wing chun" and "kung fu" matched, void "kung fu" style
+- If "BJJ", "Muay Thai", and "MMA" matched, void "BJJ" and "Muay Thai" styles
+</ul>
+
+The dataframe ended up containg the following schools and more.
+
+```{r regex}
+search_matrix_3 <- data.frame(search_matrix_3)
+names(search_matrix_3) <- c("Aikido", "Boxing", "Capoeira", "FMA", "Hapkido", "JKD", "BJJ", "JJ", "Judo", "Kajukenbo", "Karate", "Kenpo", "Kickboxing", "Krav Maga", "Kuk Sool Won", "Kung Fu", "MMA", "Muay Thai", "Self-defense", "Shotokan", "TKD", "Tai Chi", "Wingchun", "Wushu")
+
+# * UMBRELLA STYLES
+search_matrix_3$JJ[search_matrix_3$JJ == search_matrix_3$BJJ]                      <- FALSE
+search_matrix_3$Karate[search_matrix_3$Karate==search_matrix_3$`Kung Fu`]          <- FALSE
+search_matrix_3$Karate[search_matrix_3$Karate==search_matrix_3$Kenpo]              <- FALSE
+search_matrix_3$`Kung Fu`[search_matrix_3$Wushu==search_matrix_3$`Kung Fu`]        <- FALSE
+search_matrix_3$Wingchun[search_matrix_3$Wingchun==search_matrix_3$`Kung Fu`]      <- FALSE
+search_matrix_3$Karate[search_matrix_3$Shotokan==search_matrix_3$Karate]           <- FALSE
+search_matrix_3$Karate[search_matrix_3$Kenpo==search_matrix_3$Karate]              <- FALSE
+
+
+# * SELF DEFENSE AND STYLE
+search_matrix_3$`Self-defense`[search_matrix_3$`Self-defense`==search_matrix_3$TKD]  <- FALSE
+
+# * KAJUKENBO
+search_matrix_3$`Self-defense`[search_matrix_3$`Self-defense`==search_matrix_3$Kajukenbo]  <- FALSE
+search_matrix_3$`Kickboxing`[search_matrix_3$`Kickboxing`==search_matrix_3$Kajukenbo]  <- FALSE
+
+
+# * MMA STYLES
+search_matrix_3$BJJ[search_matrix_3$MMA==(search_matrix_3$BJJ==search_matrix_3$`Muay Thai`)]            <- FALSE
+search_matrix_3$`Muay Thai`[search_matrix_3$MMA==(search_matrix_3$BJJ==search_matrix_3$`Muay Thai`)]    <- FALSE
+
+search_matrix_3$MMA[(search_matrix_3$BJJ==TRUE) & (search_matrix_3$`Muay Thai`==TRUE)]           <- TRUE
+search_matrix_3$BJJ[(search_matrix_3$BJJ==TRUE) & (search_matrix_3$`Muay Thai`==TRUE)]           <- FALSE
+search_matrix_3$`Muay Thai`[(search_matrix_3$BJJ==TRUE) & (search_matrix_3$`Muay Thai`==TRUE)]   <- FALSE
+
+search_matrix_3$MMA[(search_matrix_3$BJJ==TRUE) & (search_matrix_3$MMA==TRUE)]           <- TRUE
+search_matrix_3$BJJ[(search_matrix_3$BJJ==TRUE) & (search_matrix_3$MMA==TRUE)]           <- FALSE
+
+search_matrix_3$MMA[(search_matrix_3$`Muay Thai`==TRUE) & (search_matrix_3$MMA==TRUE)]                   <- TRUE
+search_matrix_3$`Muay Thai`[(search_matrix_3$`Muay Thai`==TRUE) & (search_matrix_3$MMA==TRUE)]           <- FALSE
+
+
+
+search_matrix_4 <- data.frame(search_matrix_4)
+names(search_matrix_4) <- c("Aikido", "Boxing", "Capoeira", "FMA", "Hapkido", "JKD", "BJJ", "JJ", "Judo", "Kajukenbo", "Karate", "Kenpo", "Kickboxing", "Krav Maga", "Kuk Sool Won", "Kung Fu", "MMA", "Muay Thai", "Self-defense", "Shotokan", "TKD", "Tai Chi", "Wingchun", "Wushu")
+
+# * UMBRELLA STYLES
+search_matrix_4$JJ[search_matrix_4$JJ == search_matrix_4$BJJ]                      <- FALSE
+search_matrix_4$Karate[search_matrix_4$Karate==search_matrix_4$`Kung Fu`]          <- FALSE
+search_matrix_4$Karate[search_matrix_4$Karate==search_matrix_4$Kenpo]              <- FALSE
+search_matrix_4$`Kung Fu`[search_matrix_4$Wushu==search_matrix_4$`Kung Fu`]        <- FALSE
+search_matrix_4$Wingchun[search_matrix_4$Wingchun==search_matrix_4$`Kung Fu`]      <- FALSE
+search_matrix_4$Karate[search_matrix_4$Shotokan==search_matrix_4$Karate]           <- FALSE
+search_matrix_4$Karate[search_matrix_3$Kenpo==search_matrix_3$Karate]              <- FALSE
+
+
+# * SELF DEFENSE AND STYLE
+search_matrix_4$`Self-defense`[search_matrix_4$`Self-defense`==search_matrix_4$TKD]  <- FALSE
+
+# * KAJUKENBO
+search_matrix_4$`Self-defense`[search_matrix_4$`Self-defense`==search_matrix_4$Kajukenbo]  <- FALSE
+search_matrix_4$`Kickboxing`[search_matrix_4$`Kickboxing`==search_matrix_4$Kajukenbo]  <- FALSE
+
+
+# * MMA STYLES
+# search_matrix_4$BJJ[search_matrix_4$MMA==(search_matrix_4$BJJ==search_matrix_4$`Muay Thai`)]            <- FALSE
+# search_matrix_4$`Muay Thai`[search_matrix_4$MMA==(search_matrix_4$BJJ==search_matrix_4$`Muay Thai`)]    <- FALSE
+# 
+# search_matrix_4$MMA[(search_matrix_4$BJJ==TRUE) & (search_matrix_4$`Muay Thai`==TRUE)]           <- TRUE
+# search_matrix_4$BJJ[(search_matrix_4$BJJ==TRUE) & (search_matrix_4$`Muay Thai`==TRUE)]           <- FALSE
+# search_matrix_4$`Muay Thai`[(search_matrix_4$BJJ==TRUE) & (search_matrix_4$`Muay Thai`==TRUE)]   <- FALSE
+# 
+# search_matrix_4$MMA[(search_matrix_4$BJJ==TRUE) & (search_matrix_4$MMA==TRUE)]           <- TRUE
+# search_matrix_4$BJJ[(search_matrix_4$BJJ==TRUE) & (search_matrix_4$MMA==TRUE)]           <- FALSE
+# 
+# search_matrix_4$MMA[(search_matrix_4$`Muay Thai`==TRUE) & (search_matrix_4$MMA==TRUE)]                   <- TRUE
+# search_matrix_4$`Muay Thai`[(search_matrix_4$`Muay Thai`==TRUE) & (search_matrix_4$MMA==TRUE)]           <- FALSE
+
+
+
+
+# * STILL MORE THAN 1 TAG
+num_matches_3 <- apply(search_matrix_3, 1, function(k) length(which(k==TRUE)))
+num_matches_4 <- apply(search_matrix_4, 1, function(k) length(which(k==TRUE)))
+
+search_matrix_3[which(num_matches_4==1),] <- search_matrix_4[which(num_matches_4==1),]
+
+num_matches_4 <- apply(search_matrix_3, 1, function(k) length(which(k==TRUE)))
+styles_set_3  <- styles_set_2[-which(num_matches_4>1),]
+
+head(styles_set_3 %>% select(businesses.name, arts))
+```
+
+To my dismay, I couldn't completely get my regex to work, and I'm unproud of it. However, to make matters simple, I decided to re-search for martial arts styles within my cleaned dataset, lose even more data, and then choose randomly between multiple matches because I couldn't handle anymore debugging for my "for fun" Christmas break project. :-P Therefore, I'm assuming that the choice of naming conventions of business name, once again, is a random process and that the way a business is named can represent its martial art style. I do not think this is too unfair of an assumption.
+
+Here's how the styles I targeted with my regex searching were distributed.
+
+```{r reg-fail-barchart}
+set.seed(926)
+check_table <- do.call(rbind, lapply(styles_set_3$businesses.name, function(j) sapply(approved, function(k) grepl(k, as.character(j)))))
+search_matrix_color <- apply(check_table, 1, function(k) {
+  if (any(k==TRUE)) {
+    which(k==TRUE)
+  } else {
+    NA
+  }
+})
+
+final_styles <- sapply(search_matrix_color, function(k) {
+  bjj <- "BJJ|Brazilian Jiu-jitsu|Gracie|Brazilian|Brazilian Jiu-jitsu|Brazilian Jiu-Jitsu"
+  jj  <- "Jiu Jitsu|Jiu-jitsu|Jiu-Jitsu|Jujutsu|Aikijujutsu"
+  styles <- names(k)
+  
+  if (jj %in% styles) {
+    if (bjj %in% styles) {
+     styles <- styles[-which(styles==jj)]
+    }
+  }
+  sample(styles, 1)
+})
+
+styles_set_3 <- cbind(styles_set_3, art=final_styles)
+
+
+clean_art <- c("Karate", "TKD", "BJJ", "Kung fu", "JJ", "Aikido", "MMA", "Muay thai", "Judo", "Self-defense", "KBX", "Krav Maga", "Capoeira", "Wingchun", "Kajukenbo", "Kenpo", "Boxing", "Shotokan", "FMA", "Kuk Sool Won", "Taiji", "Wushu", "Hapkido", "JKD")
+
+art_popularity <- data.frame(cbind(art=names(sort(table(final_styles), decreasing=TRUE)), freq=sort(table(final_styles), decreasing=TRUE)))
+rownames(art_popularity) <- 1:nrow(art_popularity)
+art_popularity$freq <- as.numeric(as.character((art_popularity$freq)))
+art_popularity <- cbind(clean_art, art_popularity)
+
+ggplot(art_popularity, aes(x=clean_art, y=freq)) + 
+  geom_bar(stat="identity", aes(fill=freq)) +
+  scale_fill_distiller(palette = "Accent") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 50, hjust = 1), legend.position="none") +
+  ggtitle("Martial Arts Styles in Northern California") +
+  xlab("")
+```
+
+## Final Map
+Because I was using Leaflet's provided icons, I was limited to only 19 color choices. That being said, I only could plot 19 styles at once. Finally, here's the map! I'm not impressed by my color scheme, but the map is interesting.
+
+```{r color-assignment}
+my_palette <- c("white", "black", "gray", "pink", "red", "orange", "green", "blue", "purple",
+                "darkred", "beige", "darkgreen", "darkblue", "darkpurple", 
+                "lightred", "cadetblue","lightblue", "lightgreen", "lightgray")
+
+art_popularity_2 <- art_popularity[-10,]
+art_popularity_2 <- cbind(art_popularity_2[1:19,], my_palette)
+
+
+
+map_set <- styles_set_3 %>% 
+  filter(art!="Self Defense|Self-defense Classes") %>%
+  filter(art!="Tai Chi|Taiji") %>%
+  filter(art!="Wushu") %>%
+  filter(art!="Hapkido" )%>%
+  filter(art!="Jeet Kune DO|Jeet Kune Do")
+
+map_set$arts <- as.character(map_set$arts)
+art_popularity_2$art <- as.character(art_popularity_2$art)
+
+map_colors <- art_popularity_2$my_palette[sapply(map_set$art, function(k) which(art_popularity_2$art==k))]
+map_set <- cbind(map_set, map_colors=map_colors)
+
+these_pins <- awesomeIcons(
+  icon = "star",
+  iconColor = "black",
+  library = "ion",
+  markerColor = map_set$map_colors
+)
+
+
+
+m <- leaflet() %>%
+  setView(lng = mean(map_set$longitude), lat = mean(map_set$latitude), zoom = 8) %>%
+  addProviderTiles(providers$CartoDB.Positron) %>%
+  addAwesomeMarkers(lng = map_set$longitude, lat = map_set$latitude, popup = map_set$businesses.name, icon=these_pins)
+m  # Print the map
+```
+
+
+What is obvious is this map is filled with white and black. Kung fu schools are scattered around as well. The North Bay has an interesting amount of Capoeira. To my new knowledge, there is a bunch of traditional jiu-jitsu schools around Northern California as well as Brazilian jiu-jitsu schools.
+
+I believe there are more interesting spatial finds that I can discover by digging a bit deeper into these data, but for now -- here are the maps that absorbed my soul for 2.5 days.
+
+
+ee
+
+
+# References
+I don't know/want to learn how to properly cite at this moment. I believe that this will do as these authors are not my English professors.
+
+1. Lee, B. (2015). Bruce Lee Jeet Kune Do: Bruce Lee's Commentaries on the Martial Way (Vol. 3). Tuttle Publishing.
+
+2. Cheng, J., & Xie, Y. (2016). leaflet: create interactive web maps with the JavaScript ‘Leaflet’library. R package version 1.0. 1.’. (https://rstudio.github.io/leaflet/basemaps.html)
+
+3. Wickham, H., Francois, R., Henry, L., & Müller, K. (2015). dplyr: A grammar of data manipulation. R package version 0.4, 3.
+
+4. Yelpr. (https://github.com/OmaymaS/yelpr)
+
+5. Wickham, H. (2016). ggplot2: elegant graphics for data analysis. Springer.
